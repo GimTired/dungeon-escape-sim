@@ -6,6 +6,7 @@ New-Item -ItemType Directory -Force replays | Out-Null
 
 # 지도 선택: 기본은 수업 시연 1 재현 지도(v1). 열쇠 후보 칸은 지도 옆 <지도파일>.keycells 에서 자동으로 읽는다(없으면 지도에 적힌 열쇠 자리).
 $maps = @(
+    @('../FinalExam00/dungeonmap.dat', '교수님 최종 맵(순위제): 시작 6곳 P0(1,1) P2(6,1) P1(11,1) P4(1,11) P3(6,11) P5(11,11), 열쇠 (6,5), 출구 (6,7)'),
     @('maps/v1_lecture1_topleft.dat',  '수업 시연 1 재현: 시작 6곳=네 모서리+가운데 위아래, 출구 가운데(6,6), 열쇠는 (4,4)(8,4)(4,8)(8,8) 중 무작위'),
     @('maps/v2_lecture2_topright.dat', '수업 시연 2 재현: 가운데 가로 벽, 출구는 아래 방'),
     @('../FinalExamGameCore/dungeonmap.dat', '교수님 기존 맵'),
@@ -17,6 +18,7 @@ $maps = @(
 $map = $maps[0][0]
 
 $scen = @(
+    @('prof-ai',    '교수님 최종 업데이트의 성향 AI 5명 (P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) - 실제 교실과 가장 가까움'),
     @('meta(user)', '부상자 사냥 3 + 대기자 사냥 + 돌진 (예상 메타)'),
     @('all-wounded', '부상자 사냥 5'),
     @('wound+hunt', '부상자 사냥 2 + 대기자 사냥 2 + 소유자 추격'),

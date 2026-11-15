@@ -15,12 +15,14 @@
    메타(상대 5명 구성)는 아래 SCEN 표의 한 줄이다. 이름 앞에 *를 붙인 "*all" 같은 항목은 판마다 POOLS 에서 무작위로 뽑는다. */
 #include <windows.h>
 #include <time.h>
-#include "../FinalExamGameCore/game.h"
+#include "../FinalExam00/game.h"
 
 typedef Command (*Strategy)(const char *);
 extern int sim_open_files; /* sim_io.c */
 Command player0_choose_command(const char *);
-Command player1_choose_command(const char *); /* 교수님 예제 AI */
+Command player1_choose_command(const char *); /* 교수님 예제 AI (최종 업데이트의 성향 AI: P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) */
+Command player2_choose_command(const char *), player3_choose_command(const char *);
+Command player4_choose_command(const char *), player5_choose_command(const char *);
 Command strat_rusher(const char *), strat_wounded(const char *);
 Command strat_gatehunter(const char *), strat_hunter(const char *);
 Command strat_safe(const char *), strat_vulture(const char *), strat_exitguard(const char *);
@@ -33,6 +35,8 @@ Command strat_team4(const char *), strat_team5(const char *);
 typedef struct { const char *name; Strategy fn; } Entry;
 static const Entry STRATS[] = {
     {"ours", player0_choose_command}, {"sample", player1_choose_command},
+    {"prof2", player2_choose_command}, {"prof3", player3_choose_command},
+    {"prof4", player4_choose_command}, {"prof5", player5_choose_command},
     {"rusher", strat_rusher}, {"wounded", strat_wounded},
     {"gatehunter", strat_gatehunter}, {"hunter", strat_hunter},
     {"safe", strat_safe}, {"vulture", strat_vulture}, {"exitguard", strat_exitguard},
@@ -76,30 +80,10 @@ static const Scenario SCEN[] = {
     {"camp-2",       {"camper", "camper", "rusher", "wounded", "hunter"}},
     {"camp-1",       {"camper", "rusher", "wounded", "gatehunter", "safe"}},
     {"camp-rand",    {"*camp", "*camp", "*camp", "*camp", "*camp"}},
+    /* 교수님 최종 업데이트의 성향 AI 5명(P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형). 실제 교실 상대와 가장 가깝다 */
+    {"prof-ai",      {"sample", "prof2", "prof3", "prof4", "prof5"}},
 };
 #define NSCEN ((int)(sizeof(SCEN) / sizeof(SCEN[0])))
-
-/* 열쇠 소유자의 공격을 "안 한 것"으로 만든다: 복사본으로 이번 턴 이동만 풀어 최종 위치를 구한 뒤(이동은 공격 방향과 무관),
-   소유자 부채꼴에 아무도 들지 않는 공격 방향을 고른다. 네 방향 모두 누군가 맞는 경우는 가장 적게 맞는 방향(드묾, 세어서 보고). */
-static long key_attack_leaks = 0;
-static Command quiet_attack(const Game *g, const Command cmd[PLAYER_COUNT], int owner)
-{
-    Game t = *g; Command c[PLAYER_COUNT]; int d, j, best = 0, bestn = 99;
-    memcpy(c, cmd, sizeof(c)); c[owner] = COMMAND_ATTACK_UP;
-    game_resolve(&t, c);
-    for (d = 0; d < 4; ++d) {
-        int n = 0; Position a = g->players[owner].pos;
-        for (j = 0; j < PLAYER_COUNT; ++j) {
-            Position e, ctr = {a.x + (d == 2 ? -1 : d == 3 ? 1 : 0), a.y + (d == 0 ? -1 : d == 1 ? 1 : 0)};
-            if (j == owner || g->players[j].hp <= 0) continue;
-            e = t.players[j].pos;
-            if (d < 2 ? (e.y == ctr.y && e.x >= ctr.x - 1 && e.x <= ctr.x + 1) : (e.x == ctr.x && e.y >= ctr.y - 1 && e.y <= ctr.y + 1)) ++n;
-        }
-        if (n < bestn) { bestn = n; best = d; }
-    }
-    if (bestn > 0) ++key_attack_leaks;
-    return (Command)(COMMAND_ATTACK_UP + best);
-}
 
 static unsigned long long rng_state = 1;
 static unsigned rnd(unsigned n) /* xorshift64 */
@@ -132,7 +116,6 @@ static Strategy find(const char *name)
     fprintf(stderr, "unknown strategy %s\n", name); exit(1);
 }
 
-static int no_key_attack = 1;     /* 열쇠 소유자의 공격 금지(교수님 패치 예정 규칙). --keyattack 으로 끈다 */
 static long p0_key_attack_blocked = 0; /* 그중 P0이 낸 것 */
 static long key_attack_blocked = 0; /* 막힌 공격 명령 수(상대 전략 포함) */
 static int fix_seat = 0; /* --fixseat: 자리를 섞지 않고 맵에 적힌 P0 자리에 내가 선다(교실 시연처럼 자리가 정해진 경우) */
@@ -156,10 +139,7 @@ static int shuffle_spawns(Game *g)
         g->players[i].pos = g->players[i].spawn = spot[i];
     }
     for (i = 0; i < NPC_COUNT; ++i) if (seat_pos[i].x == g->players[0].spawn.x && seat_pos[i].y == g->players[0].spawn.y) last_seat = i;
-    /* H0 제거: 영원히 쉬는 시체로 만든다 */
-    g->players[HUMAN_PLAYER].hp = 0;
-    g->players[HUMAN_PLAYER].rest = UINT64_MAX;
-    return 1;
+    return 1; /* 최종 코어는 H0가 없다(플레이어 6명) */
 }
 
 /* 열쇠 구역: 교수님이 열쇠를 서로 다른 4구역 중 한 곳에서 시작시킬 수 있다고 해서 만든 옵션.
@@ -212,11 +192,11 @@ static const char *with_h0(const char *path, char *out, size_t cap)
     while (n < MAP_MAX && fgets(buf[n], (int)sizeof(buf[n]), f)) ++n;
     fclose(f);
     for (i = 0; i < n; ++i) { int len = (int)strlen(buf[i]); for (x = 0; x + 1 < len; x += 2) if (buf[i][x] == 'H' && buf[i][x + 1] == '0') has = 1; }
-    if (has || n < 3) return path;
-    for (i = 1; i < n - 1 && !done; ++i) {
+    /* 최종 코어는 H0 칸을 모른다("Unknown map token"). 옛 지도의 H0 는 빈 칸으로 바꾼 임시 지도를 쓴다. */
+    if (!has || n < 3) return path;
+    for (i = 0; i < n; ++i) {
         int len = (int)strlen(buf[i]);
-        for (x = 2; x + 3 < len && !done; x += 2)
-            if (buf[i][x] == ' ' && buf[i][x + 1] == ' ') { buf[i][x] = 'H'; buf[i][x + 1] = '0'; done = 1; }
+        for (x = 0; x + 1 < len; x += 2) if (buf[i][x] == 'H' && buf[i][x + 1] == '0') { buf[i][x] = ' '; buf[i][x + 1] = ' '; done = 1; }
     }
     if (!done) return path;
     snprintf(out, cap, "%s\\sim_tmp_map.dat", tmp ? tmp : ".");
@@ -264,6 +244,7 @@ static void show(const Game *g, const char *names[NPC_COUNT])
 
 typedef struct {
     int games, wins, draws, turns_sum, deaths, cancels; double max_ms; int win_by[NSTRAT];
+    int top3, escaped; long rank_sum10; /* 내 순위: 3위 안 / 탈출함 / 순위 합(탈출 못 하면 6위, 규칙상 전원 무승부는 3.5위로 계산, x10) */
     int held, carrier_deaths, lost_never_held, lost_dead; /* 패배 원인 분석 */
     int cancel_move, cancel_pick; /* 취소된 P0 명령 종류 */
     int hit_cancel, hit_attack, die_cancel, die_attack; /* P0이 처음 맞은 원인(HP2->1) / 죽은 원인(HP1->0): 명령 취소 vs 공격 */
@@ -281,7 +262,7 @@ static int play(Game *g, Strategy seat[NPC_COUNT], const char *names[NPC_COUNT],
     LARGE_INTEGER f, a, b;
     int ever_held = 0;
     QueryPerformanceFrequency(&f);
-    while (g->turn < max_turns && g->winner < 0) {
+    while (g->turn < max_turns && !g->game_over) { /* 최종 규칙: 5명이 탈출하거나(마지막 1명은 6위) 1000턴까지 아무도 못 나가면 끝 */
         Command cmd[PLAYER_COUNT];
         int i, had_key;
         game_begin_turn(g);
@@ -311,12 +292,13 @@ static int play(Game *g, Strategy seat[NPC_COUNT], const char *names[NPC_COUNT],
             int owner = g->key_owner;
             /* 교수님 패치 예정: 열쇠를 든 사람은 공격할 수 없다(공격해도 아무 일도 일어나지 않음, 피해도 없음).
                코어 game.c는 그대로 두고, 소유자의 공격을 "아무도 맞지 않는 방향"으로 돌려 효과가 없게 한다. --keyattack 이면 예전 규칙. */
-            if (no_key_attack && owner >= 0 && cmd[owner] >= COMMAND_ATTACK_UP && cmd[owner] <= COMMAND_ATTACK_RIGHT) { cmd[owner] = quiet_attack(g, cmd, owner); ++key_attack_blocked; if (owner == 0) ++p0_key_attack_blocked; }
+            /* 최종 규칙은 코어(game.c)가 처리한다: 열쇠를 든 채 공격 명령을 내면 공격이 취소되고 HP 1 페널티. 여기서는 횟수만 센다. */
+            if (owner >= 0 && cmd[owner] >= COMMAND_ATTACK_UP && cmd[owner] <= COMMAND_ATTACK_RIGHT) { ++key_attack_blocked; if (owner == 0) ++p0_key_attack_blocked; }
             { int hp0 = g->players[0].hp; game_resolve(g, cmd);
               if (hp0 > 0 && g->players[0].hp < hp0) { /* P0이 피해를 입은 턴: 취소가 섞였으면 취소, 아니면 공격 */
                   if (hp0 == MAX_HP) { if (g->cancelled[0]) ++st->hit_cancel; else ++st->hit_attack; }
                   else { if (g->cancelled[0]) ++st->die_cancel; else ++st->die_attack; } } }
-            if (owner >= 0 && g->players[owner].hp <= 0) {
+            if (owner >= 0 && g->players[owner].hp <= 0 && !g->players[owner].rank && !(cmd[owner] >= COMMAND_DROP_UP && cmd[owner] <= COMMAND_DROP_RIGHT)) { /* 탈출한 소유자(rank>0)나 그 턴에 열쇠를 이미 버린 경우는 별도 규칙 */
                 Position p = g->players[owner].pos, want = (p.x == g->exit.x && p.y == g->exit.y) ? g->key_start : p;
                 ++key_drops;
                 if (g->key_owner != -1 || g->key.x != want.x || g->key.y != want.y) {
@@ -358,8 +340,8 @@ static int play(Game *g, Strategy seat[NPC_COUNT], const char *names[NPC_COUNT],
 int main(int argc, char **argv)
 {
     /* 맵은 교수님 맵 하나로 고정 (실제 시험 환경과 같다). 바꾸고 싶으면 아래 상수만 고친다. */
-    const char *MAP_FILE = "../FinalExamGameCore/dungeonmap.dat";
-    int games = 200, max_turns = 200, verbose = 0, i, sc, gm;
+    const char *MAP_FILE = "../FinalExam00/dungeonmap.dat"; /* 교수님 최종 업데이트 맵 */
+    int games = 200, max_turns = 600, verbose = 0, i, sc, gm; /* 최종 규칙은 턴 제한이 없다(1000턴 무탈출 무승부). 시뮬은 기본 600턴에서 끊고 못 나간 사람은 6위로 센다 */
     const char *only = "all", *report_path = NULL, *label = "", *ours = "ours";
     const char *teams_arg = NULL; Scenario custom; const Scenario *scs = SCEN; int nsc = NSCEN;
     FILE *rep = NULL;
@@ -369,7 +351,6 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[i], "--seed") && i + 1 < argc) seed = _strtoui64(argv[++i], NULL, 10);
         else if (!strcmp(argv[i], "--scenario") && i + 1 < argc) only = argv[++i];
         else if (!strcmp(argv[i], "--map") && i + 1 < argc) MAP_FILE = argv[++i]; /* 다른 지도로 시험: maps\m1_open4.dat 등 */
-        else if (!strcmp(argv[i], "--keyattack")) no_key_attack = 0; /* 예전 규칙: 열쇠 소유자도 공격 가능 */
         else if (!strcmp(argv[i], "--fixseat")) fix_seat = 1; /* P0 자리를 맵에 적힌 자리로 고정 */
         else if (!strcmp(argv[i], "--byseat")) by_seat = 1; /* 끝에 시작 자리별/열쇠 구역별 승률표를 낸다 */
         else if (!strcmp(argv[i], "--keycells") && i + 1 < argc) { /* 열쇠 후보 칸을 직접 지정: "1,5;11,5;1,8;11,8" */
@@ -416,7 +397,7 @@ int main(int argc, char **argv)
     if (watch_ms >= 0) display_init(0);
     rng_state = seed ? seed : 1;
     printf("seed=%llu games/scenario=%d map=%s (고정, 스폰 자리 고정 / 플레이어 배정만 랜덤)\n", seed, games, MAP_FILE);
-    printf("%-12s %6s %6s %6s %7s %7s %8s  winners\n", "scenario", "win%", "draw%", "avgT", "deaths", "cancel", "max_ms");
+    printf("%-12s %6s %6s %5s %6s %6s %7s %7s %8s  winners(1위)\n", "scenario", "1위%", "3위내%", "평균순위", "draw%", "avgT", "deaths", "cancel", "max_ms");
     /* --report: 실행할 때마다 마크다운 기록표를 파일 끝에 덧붙인다 */
     if (report_path) {
         char when[32]; time_t now = time(NULL); struct tm lt;
@@ -450,13 +431,24 @@ int main(int argc, char **argv)
             ++st.games;
             if (by_seat && strcmp(scs[sc].name, "safes") && strcmp(scs[sc].name, "samples") && strcmp(scs[sc].name, "teams") && strcmp(scs[sc].name, "campers")) {
                 ++seat_n[last_seat][last_zone];
-                if (w == 0) ++seat_w[last_seat][last_zone];
+                if (g.players[0].rank == 1) ++seat_w[last_seat][last_zone];
             }
-            if (w < 0) ++st.draws;
-            else { st.win_by[strat_index(names[w])]++; if (w == 0) { ++st.wins; st.turns_sum += g.turn; } }
-            if (verbose || watch_ms >= 0) printf("== result: %s (%s)\n", w < 0 ? "DRAW" : "WIN", w < 0 ? "-" : names[w]);
+            {   /* 최종 규칙: 탈출 순서가 순위다. 내 순위 rk (0 = 아직 못 나감) */
+                int rk = g.players[0].rank;
+                if (g.finished_count == 0) { ++st.draws; if (g.draw) { st.rank_sum10 += 35; } else st.rank_sum10 += 60; }
+                else {
+                    st.win_by[strat_index(names[g.finish_order[0]])]++;
+                    st.rank_sum10 += rk ? rk * 10 : 60;
+                }
+                if (rk == 1) { ++st.wins; st.turns_sum += g.finish_turn[0]; }
+                if (rk >= 1 && rk <= 3) ++st.top3;
+                if (rk >= 1 && rk <= 5) ++st.escaped;
+            }
+            (void)w;
+            if (verbose || watch_ms >= 0) printf("== result: %s (rank %d)\n", g.finished_count ? names[g.finish_order[0]] : "NOBODY", g.players[0].rank);
         }
-        printf("%-12s %5.1f%% %5.1f%% %6.1f %7.2f %7.2f %8.2f ", scs[sc].name, 100.0 * st.wins / st.games,
+        printf("%-12s %5.1f%% %5.1f%% %5.2f %5.1f%% %6.1f %7.2f %7.2f %8.2f ", scs[sc].name, 100.0 * st.wins / st.games,
+            100.0 * st.top3 / st.games, st.rank_sum10 / 10.0 / st.games,
             100.0 * st.draws / st.games, st.wins ? (double)st.turns_sum / st.wins : 0.0,
             (double)st.deaths / st.games, (double)st.cancels / st.games, st.max_ms);
         for (i = 0; i < NSTRAT; ++i) if (st.win_by[i]) printf(" %s:%d", STRATS[i].name, st.win_by[i]);
@@ -486,6 +478,6 @@ int main(int argc, char **argv)
         }
     }
     printf("key-drop rule check: %ld drops, %ld violations\n", key_drops, key_rule_violations);
-    printf("열쇠 소유자 공격 금지: %s, 막힌 공격 명령 %ld개 (그중 P0 %ld개, 사방이 막혀 못 피한 것 %ld개)\n", no_key_attack ? "켬" : "끔", key_attack_blocked, p0_key_attack_blocked, key_attack_leaks);
+    printf("열쇠 든 채 공격 명령(취소 + HP1 페널티): 전체 %ld개 (그중 P0 %ld개)\n", key_attack_blocked, p0_key_attack_blocked);
     return 0;
 }
