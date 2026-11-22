@@ -305,6 +305,7 @@ static Command p3_enemy_command(P3Brain *b, int e)
             if (p3_pass(b, nx, ny, 1) && goal[ny][nx] < goal[ep.y][ep.x]) adv[nadv++] = d;
         }
         if (nadv && p3_unit(&b->rng) < 0.90) return (Command)adv[p3_rand(&b->rng) % nadv];
+        nadv = 0; /* [수정] 앞 루프에서 쌓인 개수를 지우지 않아 adv[4] 범위를 넘던 스택 오버플로 */
         for (d = 0; d < 4; ++d) {
             int nx = ep.x + P3_DX[d], ny = ep.y + P3_DY[d];
             if (p3_pass(b, nx, ny, 1)) adv[nadv++] = d;
