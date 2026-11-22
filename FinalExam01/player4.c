@@ -77,6 +77,20 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #define P4_URG_MIN 0.15    /* 위험 비용의 최소 배율 */
 #endif
 
+#ifndef P4_PATH_RISK
+#define P4_PATH_RISK 2.0   /* 출구 경로 비용: 상대 공격 범위 칸(피격 확률 1.0 기준)에 더하는 거리 */
+#endif
+
+#ifndef P4_CROWD
+#define P4_CROWD 3         /* 열쇠를 든 채 출구 3칸 이내 상대가 이 수 이상이면 입구 앞에서 대기 */
+#endif
+#ifndef P4_HOLD_R
+#define P4_HOLD_R 5        /* 대기 거리(출구까지의 걸음 수) */
+#endif
+#ifndef P4_HOLD_UNTIL
+#define P4_HOLD_UNTIL 160  /* 이 턴 이후에는 기다리지 않는다(교착 방지) */
+#endif
+
 #define P4_INF 9999
 #define P4_N MAP_MAX
 
@@ -136,6 +150,30 @@ static int p4_in_fan(int ox, int oy, int d, int px, int py)
     return ax == 1 && abs(ay) <= 1;
 }
 
+/* 출구에서 퍼져 나가는 가중 거리. 칸에 들어가는 비용 = 1 + P4_PATH_RISK * 피격확률. 적이 선 칸은 못 지나간다.
+   피격 위험이 큰 입구 대신 지키는 적이 없는 입구로 돌아 들어가게 만든다. */
+static void p4_wdist(const Snapshot *s, double hit[P4_N][P4_N], unsigned char occ[P4_N][P4_N], double out[P4_N][P4_N])
+{
+    unsigned char done[P4_N][P4_N];
+    int x, y, d, i, n = s->size;
+    for (y = 0; y < P4_N; ++y) for (x = 0; x < P4_N; ++x) { out[y][x] = 1e9; done[y][x] = 0; }
+    out[s->exit.y][s->exit.x] = 0.0;
+    for (i = 0; i < n * n; ++i) {
+        int bx = -1, by = -1; double best = 1e9;
+        for (y = 0; y < n; ++y) for (x = 0; x < n; ++x)
+            if (!done[y][x] && out[y][x] < best) { best = out[y][x]; bx = x; by = y; }
+        if (bx < 0) break;
+        done[by][bx] = 1;
+        for (d = 0; d < 4; ++d) {
+            int nx = bx + p4dx[d], ny = by + p4dy[d];
+            double c;
+            if (!p4_can(s, nx, ny, 0) || done[ny][nx] || occ[ny][nx]) continue;
+            c = best + 1.0 + P4_PATH_RISK * hit[by][bx];   /* ny,nx 에서 by,bx 로 들어가는 비용 */
+            if (c < out[ny][nx]) out[ny][nx] = c;
+        }
+    }
+}
+
 Command P4_FN(const char *state_path)
 {
     static const int dummy = 0; /* (static 상태는 쓰지 않는다. 읽기 전용 상수) */
@@ -146,6 +184,8 @@ Command P4_FN(const char *state_path)
     unsigned char occ[P4_N][P4_N];
     double pd[P4_N][P4_N];
     double hit[P4_N][P4_N];
+    double dW[P4_N][P4_N];
+    int useW = 0, hold = 0;
     double pe[PLAYER_COUNT][P4_N][P4_N];
     int alive[PLAYER_COUNT];
     Position me, carrierPos = {0, 0};
@@ -263,6 +303,14 @@ Command P4_FN(const char *state_path)
     if (carrying) {
         mode = 3;
         memcpy(dT, dEb[me.y][me.x] < P4_INF ? dEb : dE, sizeof(dT));
+        p4_wdist(&s, hit, occ, dW);
+        useW = P4_PATH_RISK > 0.0 && dW[me.y][me.x] < 1e8;
+        if (s.turn < P4_HOLD_UNTIL && dE[me.y][me.x] < P4_INF) {   /* 출구 근처에 상대가 몰려 있으면 입구 앞에서 기다린다 */
+            int crowd = 0;
+            for (i = 0; i < PLAYER_COUNT; ++i)
+                if (alive[i] && abs(s.players[i].pos.x - s.exit.x) + abs(s.players[i].pos.y - s.exit.y) <= 3) ++crowd;
+            hold = crowd >= P4_CROWD;
+        }
     } else if (keyFloor) {
         int myEta = dK[me.y][me.x] < 1 ? 2 : dK[me.y][me.x], minEta = P4_INF, bonus, idle;
         for (i = 0; i < PLAYER_COUNT; ++i) {
@@ -355,10 +403,12 @@ Command P4_FN(const char *state_path)
         if (!valid) continue;
 
         {
-            int dd = dT[ny][nx];
+            double dd = dT[ny][nx];
             if (dd >= P4_INF) dd = 200;
-            if (mode == 1) dd = abs(dd - P4_STAGE_R);
-            else if (mode == 0) dd = abs(dd - 1);
+            if (mode == 1) dd = abs((int)dd - P4_STAGE_R);
+            else if (mode == 0) dd = abs((int)dd - 1);
+            else if (mode == 3 && hold) dd = dE[ny][nx] >= P4_INF ? 200 : abs(dE[ny][nx] - P4_HOLD_R);
+            else if (mode == 3 && useW) dd = s.terrain[ny][nx] == 'E' ? 0.0 : (dW[ny][nx] < 1e8 ? dW[ny][nx] : 200.0);
             score -= P4_W * wmul * dd;
         }
 
