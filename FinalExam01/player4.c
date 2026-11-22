@@ -84,6 +84,51 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #ifndef P4_CROWD
 #define P4_CROWD 3         /* 열쇠를 든 채 출구 3칸 이내 상대가 이 수 이상이면 입구 앞에서 대기 */
 #endif
+#ifndef P4_CROWD1
+#define P4_CROWD1 P4_CROWD /* 내 체력이 1일 때 입구 앞에서 기다리는 기준 상대 수(체력 2는 P4_CROWD 그대로) */
+#endif
+#ifndef P4_PICK_Q
+#define P4_PICK_Q 70       /* 열쇠 옆의 상대가 같은 턴에 줍기를 시도할 확률(%): 동시에 줍으면 둘 다 취소 + 1피해 */
+#endif
+#ifndef P4_PICK_V
+#define P4_PICK_V 500      /* 열쇠를 줍는 가치 */
+#endif
+#ifndef P4_PICKER_ATK
+#define P4_PICKER_ATK 0    /* 열쇠를 주우려 가만히 서 있는 상대를 공격하는 추가 가치(0이면 쓰지 않는다) */
+#endif
+#ifndef P4_CLAIM
+#define P4_CLAIM 0         /* 1이면 열쇠를 안 가는 자리는 열쇠 옆이 아니라 출구 근처의 덜 붐비는 칸을 미리 차지한다 */
+#endif
+#ifndef P4_CLAIM_MASK
+#define P4_CLAIM_MASK 63   /* 자리(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR) 비트마스크: 적용할 자리 */
+#endif
+#ifndef P4_CLAIM_R
+#define P4_CLAIM_R 3       /* 출구까지의 걸음 수가 이 값 이하인 칸만 후보 */
+#endif
+#ifndef P4_CLAIM_CW
+#define P4_CLAIM_CW 4      /* 주변(체비쇼프 2 이내) 상대 한 명당 감점(가까울수록 크게) */
+#endif
+#ifndef P4_CLAIM_ADJ
+#define P4_CLAIM_ADJ 6     /* 출구 바로 옆 칸 가산점(열쇠가 떨어지면 바로 줍고 들어갈 수 있다) */
+#endif
+#ifndef P4_CLAIM_DW
+#define P4_CLAIM_DW 0.8    /* 내 이동 거리 1칸당 감점 */
+#endif
+#ifndef P4_WAIT
+#define P4_WAIT 1          /* 1이면 출구 근처를 지키는 상대가 많을 때 열쇠를 줍지 않고 지켜본다 */
+#endif
+#ifndef P4_WAIT_MASK
+#define P4_WAIT_MASK 23    /* 적용할 자리 비트마스크(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR). 23 = BL·BR 제외 */
+#endif
+#ifndef P4_WAIT_R
+#define P4_WAIT_R 3        /* 출구까지의 걸음 수가 이 값 이하인 상대를 지킴이로 센다 */
+#endif
+#ifndef P4_WAIT_N
+#define P4_WAIT_N 2        /* 지킴이가 이 수 이상이면 줍지 않는다 */
+#endif
+#ifndef P4_WAIT_UNTIL
+#define P4_WAIT_UNTIL 150  /* 이 턴 이후에는 기다리지 않는다(아무도 안 줍는 교착 방지) */
+#endif
 #ifndef P4_HOLD_R
 #define P4_HOLD_R 5        /* 대기 거리(출구까지의 걸음 수) */
 #endif
@@ -94,6 +139,15 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #ifndef P4_CARRY_HITMUL
 #define P4_CARRY_HITMUL 3.0 /* 열쇠를 든 동안 피격 비용 배율(1.5→3.0: 좌상단 자리 다른 팀 코드 상대 평균 순위 3.52→3.35) */
 #endif
+
+/* ---------- 자리별 오프닝 층 ----------
+   공통 코어(탈출/교전/교착 방지)는 모든 자리가 같고, 시작 자리(spawn)에 따라 초반 행동 몇 가지만 다르게 한다.
+   자리 번호 = 위/아래(0/1) * 3 + 왼/가운데/오른쪽(0/1/2) : 0 좌상, 1 상중, 2 우상, 3 좌하, 4 하중, 5 우하.
+   각 칸: { 열쇠 경쟁 허용폭 보정(+면 서둘러 간다, -면 기다린다), 대기 거리, 대기 기준(0 열쇠 / 1 출구), 위험 비용 배율(%) } */
+#ifndef P4_SEAT_TABLE
+#define P4_SEAT_TABLE { {0, 2, 0, 100}, {0, 2, 0, 100}, {0, 2, 0, 100}, {0, 2, 0, 100}, {0, 2, 0, 100}, {0, 2, 0, 100} }
+#endif
+
 #define P4_INF 9999
 #define P4_N MAP_MAX
 
@@ -197,6 +251,10 @@ Command P4_FN(const char *state_path)
     double hitCost, bestScore = -1e18, wmul = 1.0;
     Command best = COMMAND_ATTACK_UP;
     int lvl[P4_N * 2];
+    static const int seatTab[6][4] = P4_SEAT_TABLE;
+    int seat, seatGo, seatStg, seatStx, seatHm;
+    int claimOn = 0;
+    int waitPick = 0;
     (void)dummy;
 
     fp = fopen(state_path, "r");
@@ -206,6 +264,12 @@ Command P4_FN(const char *state_path)
     if (!i) return COMMAND_ATTACK_UP;
     if (s.size < 3 || s.size > MAP_MAX || s.self < 0 || s.self >= PLAYER_COUNT) return COMMAND_ATTACK_UP;
 
+    {   /* 시작 자리 번호 (맵 크기에 비례해 3x2로 나눈다) */
+        Position sp = s.players[s.self].spawn;
+        int cx = sp.x * 3 / s.size, cy = sp.y * 2 / s.size;
+        seat = (cy > 1 ? 1 : cy) * 3 + (cx > 2 ? 2 : cx);
+        seatGo = seatTab[seat][0]; seatStg = seatTab[seat][1]; seatStx = seatTab[seat][2]; seatHm = seatTab[seat][3];
+    }
     me = s.players[s.self].pos;
     myhp = s.players[s.self].hp;
     carrier = s.key_owner;
@@ -213,6 +277,7 @@ Command P4_FN(const char *state_path)
     keyFloor = carrier < 0;
     hitCost = myhp >= 2 ? P4_HIT_COST2 : P4_HIT_COST1;
     if (carrying) hitCost *= P4_CARRY_HITMUL;
+    hitCost = hitCost * seatHm / 100.0;
     /* 교착 방지: 매 턴 새 프로세스라 기억이 없으므로 게임 턴으로 인내심을 잰다. P4_URG_START 턴부터 위험 비용을 서서히 줄여서
        출구를 지키는 적을 계속 피하다 600턴을 넘기는 일(탈출 못 하면 순위 없음)을 막는다. */
     if (s.turn > P4_URG_START) {
@@ -312,7 +377,7 @@ Command P4_FN(const char *state_path)
             int crowd = 0;
             for (i = 0; i < PLAYER_COUNT; ++i)
                 if (alive[i] && abs(s.players[i].pos.x - s.exit.x) + abs(s.players[i].pos.y - s.exit.y) <= 3) ++crowd;
-            hold = crowd >= P4_CROWD;
+            hold = crowd >= (myhp <= 1 ? P4_CROWD1 : P4_CROWD);
         }
     } else if (keyFloor) {
         int myEta = dK[me.y][me.x] < 1 ? 2 : dK[me.y][me.x], minEta = P4_INF, bonus, idle;
@@ -330,9 +395,38 @@ Command P4_FN(const char *state_path)
         }
         idle = KEY_RESPAWN_TURNS - s.key_respawn_remaining;
         if (idle < 0) idle = 0;
-        bonus = P4_GO_BIAS + idle / P4_IDLE_DIV + s.turn / P4_PATIENCE + finished;
+        bonus = P4_GO_BIAS + seatGo + idle / P4_IDLE_DIV + s.turn / P4_PATIENCE + finished;
         mode = (minEta - myEta + bonus >= 0 || nalive == 0) ? 0 : 1;
+        if (P4_WAIT && ((P4_WAIT_MASK >> seat) & 1) && s.turn < P4_WAIT_UNTIL) {
+            int guards = 0;
+            for (i = 0; i < PLAYER_COUNT; ++i)
+                if (alive[i] && dE[s.players[i].pos.y][s.players[i].pos.x] <= P4_WAIT_R) ++guards;
+            if (guards >= P4_WAIT_N) { waitPick = 1; mode = 1; }
+        }
         memcpy(dT, dK, sizeof(dT));
+        if (P4_CLAIM && mode == 1 && ((P4_CLAIM_MASK >> seat) & 1) && dE[me.y][me.x] < P4_INF) {
+            /* 출구 근처에서 가장 덜 붐비는 칸을 고른다. 상대가 서 있는 칸은 못 들어간다 */
+            double bv = -1e18; int cx = -1, cy = -1, px, py;
+            for (py = 0; py < s.size; ++py)
+                for (px = 0; px < s.size; ++px) {
+                    double v = 0.0; int e;
+                    if (dE[py][px] < 1 || dE[py][px] > P4_CLAIM_R || s.terrain[py][px] == 'E' || occ[py][px] || dMe[py][px] >= P4_INF) continue;
+                    for (e = 0; e < PLAYER_COUNT; ++e) {
+                        int ch;
+                        if (!alive[e]) continue;
+                        ch = p4_cheb(px, py, s.players[e].pos.x, s.players[e].pos.y);
+                        if (ch <= 2) v -= P4_CLAIM_CW * (3 - ch) / 3.0;
+                    }
+                    if (dE[py][px] == 1) v += P4_CLAIM_ADJ;
+                    v -= P4_CLAIM_DW * dMe[py][px];
+                    if (v > bv) { bv = v; cx = px; cy = py; }
+                }
+            if (cx >= 0) {
+                Position t; t.x = cx; t.y = cy;
+                p4_bfs(&s, t, 0, NULL, -1, -1, dT);
+                claimOn = 1;
+            }
+        }
     } else {
         /* 남이 열쇠를 들었다: 소유자의 출구 최단 경로 위에서 먼저 자리 잡기 */
         int dEc = dE[carrierPos.y][carrierPos.x];
@@ -408,7 +502,11 @@ Command P4_FN(const char *state_path)
         {
             double dd = dT[ny][nx];
             if (dd >= P4_INF) dd = 200;
-            if (mode == 1) dd = abs((int)dd - P4_STAGE_R);
+            if (mode == 1 && claimOn) dd = dT[ny][nx] >= P4_INF ? 200 : dT[ny][nx];
+            else if (mode == 1) {
+                if (seatStx && dE[ny][nx] < P4_INF) dd = abs(dE[ny][nx] - seatStg);   /* 출구 쪽에서 기다린다 */
+                else dd = abs((int)dd - seatStg);
+            }
             else if (mode == 0) dd = abs((int)dd - 1);
             else if (mode == 3 && hold) dd = dE[ny][nx] >= P4_INF ? 200 : abs(dE[ny][nx] - P4_HOLD_R);
             else if (mode == 3 && useW) dd = s.terrain[ny][nx] == 'E' ? 0.0 : (dW[ny][nx] < 1e8 ? dW[ny][nx] : 200.0);
@@ -428,9 +526,9 @@ Command P4_FN(const char *state_path)
             for (i = 0; i < PLAYER_COUNT; ++i) {
                 if (!alive[i]) continue;
                 if (abs(s.players[i].pos.x - s.key.x) + abs(s.players[i].pos.y - s.key.y) == 1)
-                    conf = 1.0 - (1.0 - conf) * 0.3;
+                    conf = 1.0 - (1.0 - conf) * ((100 - P4_PICK_Q) / 100.0);
             }
-            gain += 500.0 * (1.0 - conf) - hitCost * conf;
+            gain += (waitPick ? -50.0 : P4_PICK_V * (1.0 - conf)) - hitCost * conf;
         }
 
         if (c >= 4 && c < 8) {                  /* 공격 + (제자리이므로) 막기 */
@@ -444,6 +542,15 @@ Command P4_FN(const char *state_path)
                 if (s.players[i].hp == 1) v *= 2.5;
                 if (carrier == i) v *= P4_CARRIER_MUL;
                 gain += pin * v;
+            }
+            if (P4_PICKER_ATK > 0 && keyFloor) {      /* 열쇠를 주우려는 상대는 제자리라 부채꼴에 들어 있으면 확실히 맞는다 */
+                for (i = 0; i < PLAYER_COUNT; ++i) {
+                    int ex, ey;
+                    if (!alive[i]) continue;
+                    ex = s.players[i].pos.x; ey = s.players[i].pos.y;
+                    if (abs(ex - s.key.x) + abs(ey - s.key.y) == 1 && p4_in_fan(me.x, me.y, c - 4, ex, ey))
+                        gain += (P4_PICK_Q / 100.0) * P4_PICKER_ATK;
+                }
             }
             if (carrier >= 0 && carrier != s.self && alive[carrier])
                 gain += pe[carrier][me.y][me.x] * P4_BUMP_VAL;   /* 내 칸으로 들어오려다 취소되는 소유자 */
