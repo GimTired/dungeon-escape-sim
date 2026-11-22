@@ -61,6 +61,22 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #define P4_CHASE_TURN 150  /* 이 턴 이후 소유자가 안 나가면 직접 쫓는다 */
 #endif
 
+#ifndef P4_URG_START
+#define P4_URG_START 120   /* 이 턴부터 위험을 덜 따진다 */
+#endif
+#ifndef P4_URG_SPAN
+#define P4_URG_SPAN 300.0  /* 이 턴 동안 선형으로 줄인다 */
+#endif
+#ifndef P4_URG_PROG
+#define P4_URG_PROG 60.0   /* 열쇠를 든 채 이 턴이 지날 때마다 전진 가중치 +1 */
+#endif
+#ifndef P4_URG_WMAX
+#define P4_URG_WMAX 8.0
+#endif
+#ifndef P4_URG_MIN
+#define P4_URG_MIN 0.15    /* 위험 비용의 최소 배율 */
+#endif
+
 #define P4_INF 9999
 #define P4_N MAP_MAX
 
@@ -135,7 +151,7 @@ Command P4_FN(const char *state_path)
     Position me, carrierPos = {0, 0};
     int i, x, y, d, c, carrying, keyFloor, carrier, myhp, nalive = 0, finished = 0;
     int mode; /* 0 key go, 1 ambush near key, 2 intercept carrier, 3 carry */
-    double hitCost, bestScore = -1e18;
+    double hitCost, bestScore = -1e18, wmul = 1.0;
     Command best = COMMAND_ATTACK_UP;
     int lvl[P4_N * 2];
     (void)dummy;
@@ -154,6 +170,12 @@ Command P4_FN(const char *state_path)
     keyFloor = carrier < 0;
     hitCost = myhp >= 2 ? P4_HIT_COST2 : P4_HIT_COST1;
     if (carrying) hitCost *= 1.5;
+    /* 교착 방지: 매 턴 새 프로세스라 기억이 없으므로 게임 턴으로 인내심을 잰다. P4_URG_START 턴부터 위험 비용을 서서히 줄여서
+       출구를 지키는 적을 계속 피하다 600턴을 넘기는 일(탈출 못 하면 순위 없음)을 막는다. */
+    if (s.turn > P4_URG_START) {
+        double u = 1.0 - (double)(s.turn - P4_URG_START) / P4_URG_SPAN;
+        hitCost *= u < P4_URG_MIN ? P4_URG_MIN : u;
+    }
 
     memset(occ, 0, sizeof(occ));
     for (i = 0; i < PLAYER_COUNT; ++i) {
@@ -308,6 +330,12 @@ Command P4_FN(const char *state_path)
         }
     }
 
+    /* 열쇠를 든 채 오래 못 나가면 전진 이득을 키운다(위험을 감수하고서라도 출구로) */
+    if (mode == 3 && s.turn > P4_URG_START) {
+        wmul = 1.0 + (double)(s.turn - P4_URG_START) / P4_URG_PROG;
+        if (wmul > P4_URG_WMAX) wmul = P4_URG_WMAX;
+    }
+
     /* ---------- 16개 명령 평가 ---------- */
     for (c = 0; c < COMMAND_COUNT; ++c) {
         int nx = me.x, ny = me.y, valid = 1, moving = 0;
@@ -331,7 +359,7 @@ Command P4_FN(const char *state_path)
             if (dd >= P4_INF) dd = 200;
             if (mode == 1) dd = abs(dd - P4_STAGE_R);
             else if (mode == 0) dd = abs(dd - 1);
-            score -= P4_W * dd;
+            score -= P4_W * wmul * dd;
         }
 
         if (mode == 3 && moving && s.terrain[ny][nx] == 'E') {
