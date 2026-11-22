@@ -1,7 +1,20 @@
 ﻿# 시뮬레이션 메뉴: 시나리오 한 판을 턴별 리플레이 파일로 저장해 메모장으로 열거나, 전체 기록표를 만든다.
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
-if (!(Test-Path .\sim.exe) -or (Get-Item .\sim.c).LastWriteTime -gt (Get-Item .\sim.exe).LastWriteTime) { cmd /c .\build.bat | Out-Null }  # sim.c 가 더 새로우면 자동으로 다시 빌드
+# 빌드: 이전 sim.exe 를 지우고 build.bat 을 돌린다. 성공 여부는 sim.exe 가 새로 생겼는지로 판단한다.
+# (cmd 안에서 2>&1 로 합쳐서 PowerShell 이 stderr 를 에러로 취급하지 않게 한다.)
+function Build-Sim([bool]$Quiet) {
+    Remove-Item .\sim.exe -ErrorAction SilentlyContinue
+    $out = cmd /c ".\build.bat 2>&1"
+    $ok = Test-Path .\sim.exe
+    if (!$Quiet -or !$ok) { $out | ForEach-Object { Write-Host $_ } }
+    if (!$ok) { Write-Host '[오류] sim.exe 빌드에 실패했습니다. 위의 빌드 메시지를 확인하세요.' -ForegroundColor Red }
+    return $ok
+}
+# 시뮬레이터 소스(코어 .c/.h, 내 전략 player0.c, custom 폴더 포함) 중 하나라도 sim.exe 보다 새로우면 다시 빌드한다.
+$sources = @(Get-ChildItem .\*.c, .\*.bat, ..\FinalExam00\*.c, ..\FinalExam00\*.h, .\custom\*.c) + @(Get-Item ..\FinalExamGameCore\player0.c)
+$newest = ($sources | Measure-Object LastWriteTime -Maximum).Maximum
+if (!(Test-Path .\sim.exe) -or $newest -gt (Get-Item .\sim.exe).LastWriteTime) { [void](Build-Sim $true) }
 New-Item -ItemType Directory -Force replays | Out-Null
 
 # 지도 선택: 기본은 수업 시연 1 재현 지도(v1). 열쇠 후보 칸은 지도 옆 <지도파일>.keycells 에서 자동으로 읽는다(없으면 지도에 적힌 열쇠 자리).
@@ -59,12 +72,16 @@ while ($true) {
     Write-Host '  0. 종료'
     $c = Read-Host '번호 또는 글자'
     if ($c -eq '0') { break }
-    if ($c -eq 'b') { cmd /c .\build.bat; continue }
+    if ($c -eq 'b') { if (Build-Sim $false) { Write-Host '빌드 성공: sim.exe' -ForegroundColor Green }; continue }
     if ($c -eq 'e') {
         for ($i = 0; $i -lt $maps.Count; $i++) { Write-Host ("  {0}. {1}" -f ($i + 1), $maps[$i][1]) }
         $m = Read-Host '지도 번호'
         $mi = 0
         if ([int]::TryParse($m, [ref]$mi) -and $mi -ge 1 -and $mi -le $maps.Count) { $map = $maps[$mi - 1][0] } else { Write-Host '잘못된 번호' }
+        continue
+    }
+    if ($c -ne 'd' -and !(Test-Path .\sim.exe)) {
+        Write-Host '[오류] sim.exe 가 없습니다. b 를 눌러 다시 빌드하고 에러 메시지를 확인하세요.' -ForegroundColor Red
         continue
     }
     if ($c -eq 'f') {

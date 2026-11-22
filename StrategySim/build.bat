@@ -2,7 +2,7 @@
 rem 시뮬레이터 빌드: 실제 FinalExamGameCore\player0.c 를 그대로 링크한다. (프로젝트와 같은 /sdl, _CRT_SECURE_NO_WARNINGS)
 setlocal
 cd /d "%~dp0"
-where cl >nul 2>nul || call "C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat" >nul
+call "%~dp0vsenv.bat" || exit /b 1
 if not exist obj mkdir obj
 rem 코어는 교수님 최종 업데이트(FinalExam00), P0 자리 전략은 제출 파일(FinalExamGameCore\player0.c)
 set CORE=..\FinalExam00
