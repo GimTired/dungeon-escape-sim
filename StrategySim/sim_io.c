@@ -10,6 +10,19 @@
 static HANDLE pending[16]; /* 슬롯별로 쓰기가 끝나고 읽기를 기다리는 파이프 읽기 끝 */
 int sim_open_files;
 
+/* P5(class5.c)는 상태 파일 경로 뒤에 ".p5-N-memory"를 붙인 파일에 턴 사이 기억을 저장한다. 시뮬의 "mem:N" 경로는 파이프라
+   그 이름을 그대로 쓰면 안 되므로, 이름에 ".p5-"가 있으면 %TEMP% 의 진짜 파일(sim_p5_N.bin)로 돌린다. 판이 바뀔 때마다 sim.c 가 지운다. */
+static void p5_file(const char *path, char *out, size_t cap)
+{
+    const char *tmp = getenv("TEMP");
+    snprintf(out, cap, "%s\\sim_p5_%d.bin", tmp ? tmp : ".", atoi(path + 4) & 15);
+}
+void sim_reset_memory(void)
+{
+    char p[600]; int i;
+    for (i = 0; i < 16; ++i) { char fake[32]; snprintf(fake, sizeof(fake), "mem:%d", i); p5_file(fake, p, sizeof(p)); remove(p); }
+}
+
 void diagnostics_begin(void) {}
 int diagnostics_end(void) { return 0; }
 
@@ -17,7 +30,11 @@ FILE *checked_fopen(const char *path, const char *mode, const char *source, int 
 {
     FILE *f;
     (void)source; (void)line;
-    if (strncmp(path, "mem:", 4) == 0) {
+    if (strncmp(path, "mem:", 4) == 0 && strstr(path, ".p5-") != NULL) {
+        char real[600];
+        p5_file(path, real, sizeof(real));
+        f = fopen(real, mode);
+    } else if (strncmp(path, "mem:", 4) == 0) {
         int slot = atoi(path + 4) & 15;
         if (mode[0] == 'w') {
             HANDLE r, w;

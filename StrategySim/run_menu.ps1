@@ -32,6 +32,7 @@ $maps = @(
 $map = $maps[0][0]
 
 $scen = @(
+    @('class-teams', '지난 시험 다른 팀 코드 5개(class0,1,2,3,5 = FinalExam00 player0,1,2,3,5) - 실제 상대와 가장 가까움'),
     @('prof-ai',    '교수님 최종 업데이트의 성향 AI 5명 (P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) - 실제 교실과 가장 가까움'),
     @('meta(user)', '부상자 사냥 3 + 대기자 사냥 + 돌진 (예상 메타)'),
     @('all-wounded', '부상자 사냥 5'),
@@ -90,7 +91,7 @@ while ($true) {
         continue
     }
     if ($c -eq 'c') {
-        Write-Host '쓸 수 있는 이름: ours sample rusher wounded gatehunter hunter safe vulture exitguard brawler chaos team1~team5'
+        Write-Host '쓸 수 있는 이름: ours class0 class1 class2 class3 class5(지난 시험 다른 팀) sample rusher wounded gatehunter hunter safe vulture exitguard brawler chaos team1~team5'
         $t = Read-Host '팀 6개를 쉼표로 (첫 번째가 승률 기준 팀)'
         $g = Read-Host '몇 판? (엔터=500)'
         if ($g -notmatch '^\d+$') { $g = 500 }

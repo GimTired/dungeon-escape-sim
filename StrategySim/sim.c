@@ -19,6 +19,7 @@
 
 typedef Command (*Strategy)(const char *);
 extern int sim_open_files; /* sim_io.c */
+void sim_reset_memory(void); /* sim_io.c: P5 의 턴 사이 기억 파일을 지운다 */
 Command player0_choose_command(const char *);
 Command player1_choose_command(const char *); /* 교수님 예제 AI (최종 업데이트의 성향 AI: P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) */
 Command player2_choose_command(const char *), player3_choose_command(const char *);
@@ -27,6 +28,9 @@ Command strat_rusher(const char *), strat_wounded(const char *);
 Command strat_gatehunter(const char *), strat_hunter(const char *);
 Command strat_safe(const char *), strat_vulture(const char *), strat_exitguard(const char *);
 Command strat_brawler(const char *), strat_chaos(const char *), strat_camper(const char *);
+/* 지난 시험 다른 팀 코드(custom\class0,1,2,3,5.c = 교수님 저장소 FinalExam00\player0,1,2,3,5.c 복사본) */
+Command strat_class0(const char *), strat_class1(const char *), strat_class2(const char *);
+Command strat_class3(const char *), strat_class5(const char *);
 /* 팀원 전략 칸: custom\team1.c ~ team5.c 에 들어 있다 */
 Command strat_team1(const char *), strat_team2(const char *), strat_team3(const char *);
 Command strat_team4(const char *), strat_team5(const char *);
@@ -41,6 +45,8 @@ static const Entry STRATS[] = {
     {"gatehunter", strat_gatehunter}, {"hunter", strat_hunter},
     {"safe", strat_safe}, {"vulture", strat_vulture}, {"exitguard", strat_exitguard},
     {"brawler", strat_brawler}, {"chaos", strat_chaos}, {"camper", strat_camper},
+    {"class0", strat_class0}, {"class1", strat_class1}, {"class2", strat_class2},
+    {"class3", strat_class3}, {"class5", strat_class5},
     {"team1", strat_team1}, {"team2", strat_team2}, {"team3", strat_team3},
     {"team4", strat_team4}, {"team5", strat_team5},
 };
@@ -51,6 +57,7 @@ static const Entry STRATS[] = {
    이름은 위 STRATS 표의 이름만 쓸 수 있다. 시나리오 이름은 메뉴의 --scenario 에 그대로 쓰이니 겹치지 않게 짓는다. */
 typedef struct { const char *name; const char *opp[5]; } Scenario;
 static const Scenario SCEN[] = {
+    {"class-teams",  {"class0", "class1", "class2", "class3", "class5"}},   /* 지난 시험 다른 팀 코드 5개 = 실제 상대에 가장 가까운 메타 */
     {"meta(user)",   {"wounded", "wounded", "wounded", "gatehunter", "rusher"}},
     {"all-wounded",  {"wounded", "wounded", "wounded", "wounded", "wounded"}},
     {"wound+hunt",   {"wounded", "wounded", "gatehunter", "gatehunter", "hunter"}},
@@ -417,6 +424,7 @@ int main(int argc, char **argv)
             static Game g;
             Strategy seat[NPC_COUNT]; const char *names[NPC_COUNT]; int w, k;
             FILE *f = fopen(MAP_FILE, "r"); char err[256];
+            sim_reset_memory(); /* 판마다 P5 기억을 비운다(실제 게임도 판마다 새로 시작) */
             if (!f) { fprintf(stderr, "map open fail %s\n", MAP_FILE); return 1; }
             if (!game_load(&g, f, err, sizeof(err))) { fclose(f); fprintf(stderr, "map load fail %s: %s\n", MAP_FILE, err); return 1; }
             fclose(f);
