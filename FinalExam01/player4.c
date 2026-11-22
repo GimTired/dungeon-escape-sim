@@ -91,6 +91,9 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #define P4_HOLD_UNTIL 160  /* 이 턴 이후에는 기다리지 않는다(교착 방지) */
 #endif
 
+#ifndef P4_CARRY_HITMUL
+#define P4_CARRY_HITMUL 3.0 /* 열쇠를 든 동안 피격 비용 배율(1.5→3.0: 좌상단 자리 다른 팀 코드 상대 평균 순위 3.52→3.35) */
+#endif
 #define P4_INF 9999
 #define P4_N MAP_MAX
 
@@ -209,7 +212,7 @@ Command P4_FN(const char *state_path)
     carrying = carrier == s.self;
     keyFloor = carrier < 0;
     hitCost = myhp >= 2 ? P4_HIT_COST2 : P4_HIT_COST1;
-    if (carrying) hitCost *= 1.5;
+    if (carrying) hitCost *= P4_CARRY_HITMUL;
     /* 교착 방지: 매 턴 새 프로세스라 기억이 없으므로 게임 턴으로 인내심을 잰다. P4_URG_START 턴부터 위험 비용을 서서히 줄여서
        출구를 지키는 적을 계속 피하다 600턴을 넘기는 일(탈출 못 하면 순위 없음)을 막는다. */
     if (s.turn > P4_URG_START) {
