@@ -11,16 +11,17 @@ function Build-Sim([bool]$Quiet) {
     if (!$ok) { Write-Host '[오류] sim.exe 빌드에 실패했습니다. 위의 빌드 메시지를 확인하세요.' -ForegroundColor Red }
     return $ok
 }
-# 시뮬레이터 소스(코어 .c/.h, 내 전략 player0.c, custom 폴더 포함) 중 하나라도 sim.exe 보다 새로우면 다시 빌드한다.
-$sources = @(Get-ChildItem .\*.c, .\*.bat, ..\FinalExam00\*.c, ..\FinalExam00\*.h, .\custom\*.c) + @(Get-Item ..\FinalExamGameCore\player0.c)
+# 시뮬레이터 소스(FinalExam01 코어 .c/.h와 우리 player4.c, 옛 팀 코드, custom 폴더 포함) 중 하나라도 sim.exe 보다 새로우면 다시 빌드한다.
+$sources = @(Get-ChildItem .\*.c, .\*.bat, ..\FinalExam01\*.c, ..\FinalExam01\*.h, ..\FinalExam00\player*.c, ..\FinalExam00\sample_ai.h, .\custom\*.c)
 $newest = ($sources | Measure-Object LastWriteTime -Maximum).Maximum
 if (!(Test-Path .\sim.exe) -or $newest -gt (Get-Item .\sim.exe).LastWriteTime) { [void](Build-Sim $true) }
 New-Item -ItemType Directory -Force replays | Out-Null
 
 # 지도 선택: 기본은 수업 시연 1 재현 지도(v1). 열쇠 후보 칸은 지도 옆 <지도파일>.keycells 에서 자동으로 읽는다(없으면 지도에 적힌 열쇠 자리).
 $maps = @(
-    @('maps/f01_17x17.dat', 'FinalExam01 맵(17x17): 시작 6곳 P4(1,1) P3(8,1) P0(15,1) P1(1,15) P5(8,15) P2(15,15), 열쇠 (8,4), 출구 (8,11)'),
-    @('../FinalExam00/dungeonmap.dat', '교수님 최종 맵(순위제): 시작 6곳 P0(1,1) P2(6,1) P1(11,1) P4(1,11) P3(6,11) P5(11,11), 열쇠 (6,5), 출구 (6,7)'),
+    @('../FinalExam01/dungeonmap.dat', 'FinalExam01 본 시험 맵(17x17, 순위제, 열쇠 30턴 방치 시 원위치): 시작 6곳은 맵에 적힌 P0~P5 자리'),
+    @('../FinalExam01/dungeonmap_13x13.dat', 'FinalExam01 폴더의 13x13 맵'),
+    @('../FinalExam00/dungeonmap.dat', '지난 시험 맵(FinalExam00, 13x13)'),
     @('maps/v1_lecture1_topleft.dat',  '수업 시연 1 재현: 시작 6곳=네 모서리+가운데 위아래, 출구 가운데(6,6), 열쇠는 (4,4)(8,4)(4,8)(8,8) 중 무작위'),
     @('maps/v2_lecture2_topright.dat', '수업 시연 2 재현: 가운데 가로 벽, 출구는 아래 방'),
     @('../FinalExamGameCore/dungeonmap.dat', '교수님 기존 맵'),
@@ -33,7 +34,7 @@ $map = $maps[0][0]
 
 $scen = @(
     @('class-teams', '지난 시험 다른 팀 코드 5개(class0,1,2,3,5 = FinalExam00 player0,1,2,3,5) - 실제 상대와 가장 가까움'),
-    @('prof-ai',    '교수님 최종 업데이트의 성향 AI 5명 (P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) - 실제 교실과 가장 가까움'),
+    @('prof-ai',    '교수님 성향 AI 5명 (P1 공격형, P2 길막형, P3 생존형, P4 탈취형, P5 균형형) - 실제 교실과 가장 가까움'),
     @('meta(user)', '부상자 사냥 3 + 대기자 사냥 + 돌진 (예상 메타)'),
     @('all-wounded', '부상자 사냥 5'),
     @('wound+hunt', '부상자 사냥 2 + 대기자 사냥 2 + 소유자 추격'),
@@ -63,10 +64,10 @@ $scen = @(
 
 while ($true) {
     Write-Host ''
-    Write-Host ("===== Dungeon Escape 시뮬레이션 (내 전략 = P0, 지도: {0}, P0 시작 자리와 상대 배정은 매 판 랜덤, H0 없음) =====" -f $map)
+    Write-Host ("===== Dungeon Escape 시뮬레이션 (내 전략 = FinalExam01\player4.c, 지도: {0}, 시작 자리와 상대 배정은 매 판 랜덤) =====" -f $map)
     for ($i = 0; $i -lt $scen.Count; $i++) { Write-Host ("  {0}. 한 판 보기 - {1}" -f ($i + 1), $scen[$i][1]) }
     Write-Host '  a. 전체 기록표 만들기 (시나리오마다 300판, results.md에 추가)'
-    Write-Host '  b. player0.c / custom 폴더 / sim.c 고친 뒤 다시 빌드'
+    Write-Host '  b. player4.c / custom 폴더 / sim.c 고친 뒤 다시 빌드'
     Write-Host '  c. 6팀 직접 지정해서 돌리기 (첫 번째 팀이 기준, 예: ours,safe,vulture,exitguard,brawler,team1)'
     Write-Host '  d. 코어 버그 탐침 (probe.exe: 규칙 경계 상황 + 무작위 판 + 맵/상태파일 변조)'
     Write-Host '  e. 지도 바꾸기 (수업 시연 1·2 재현, 기존 맵, 출구 변형 지도)'
@@ -91,7 +92,7 @@ while ($true) {
         continue
     }
     if ($c -eq 'c') {
-        Write-Host '쓸 수 있는 이름: ours class0 class1 class2 class3 class5(지난 시험 다른 팀) sample rusher wounded gatehunter hunter safe vulture exitguard brawler chaos team1~team5'
+        Write-Host '쓸 수 있는 이름: ours(=FinalExam01\player4.c) class0 class1 class2 class3 class5(지난 시험 다른 팀) oldp4(우리 옛 P4 기준선) sample prof2~prof5 rusher wounded gatehunter hunter safe vulture exitguard brawler chaos team1~team5'
         $t = Read-Host '팀 6개를 쉼표로 (첫 번째가 승률 기준 팀)'
         $g = Read-Host '몇 판? (엔터=500)'
         if ($g -notmatch '^\d+$') { $g = 500 }
