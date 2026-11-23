@@ -132,6 +132,42 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #ifndef P4_WAIT_UNTIL
 #define P4_WAIT_UNTIL 150  /* 이 턴 이후에는 기다리지 않는다(아무도 안 줍는 교착 방지) */
 #endif
+#ifndef P4_DROP
+#define P4_DROP 1          /* 1이면 열쇠를 든 채 한 명이 따라붙을 때 열쇠를 일부러 떨어뜨려 줍는 순간을 노린다 */
+#endif
+#ifndef P4_DROP_MASK
+#define P4_DROP_MASK 56    /* 적용할 자리 비트마스크(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR). 56 = BL·BM·BR (3위 내 비율이 오른 자리) */
+#endif
+#ifndef P4_DROP_V
+#define P4_DROP_V 40.0     /* 떨어뜨리기 가치 */
+#endif
+#ifndef P4_DROP_MIND
+#define P4_DROP_MIND 4     /* 출구까지의 걸음 수가 이 값 이상일 때만(출구 코앞이면 그냥 달린다) */
+#endif
+#ifndef P4_DROP_ANYHP
+#define P4_DROP_ANYHP 0    /* 1이면 상대 HP가 2여도 떨어뜨린다(기본은 HP 1일 때만: 줍는 턴의 확정 타격으로 처치) */
+#endif
+#ifndef P4_DROP_ATK
+#define P4_DROP_ATK 150.0  /* 떨어뜨린 뒤 줍는 상대를 때리는 가치 */
+#endif
+#ifndef P4_DROP_CD
+#define P4_DROP_CD 24      /* 기억 없이 반복을 막는 방법: 매 이 턴 중 앞 P4_DROP_WIN 턴에만 떨어뜨릴 수 있다 */
+#endif
+#ifndef P4_DROP_WIN
+#define P4_DROP_WIN 4
+#endif
+#ifndef P4_ASTAR
+#define P4_ASTAR 0         /* 1이면 열쇠를 든 채 이동할 때 시간까지 따지는 A* 로 "맞지 않고 출구에 닿는" 경로 비용을 계산해 이동을 고른다 */
+#endif
+#ifndef P4_AS_T
+#define P4_AS_T 20         /* A* 가 내다보는 최대 걸음 수 */
+#endif
+#ifndef P4_AS_REACH
+#define P4_AS_REACH 0.25   /* 지금은 떨어져 있지만 t걸음 안에 붙을 수 있는 상대의 공격 위험 배율 */
+#endif
+#ifndef P4_AS_HIT
+#define P4_AS_HIT 1.0      /* 피격 1회(확률 1)를 걸음 수로 환산하는 배율(1.0 = 이동 점수식의 피격 비용과 같은 값) */
+#endif
 #ifndef P4_HOLD_R
 #define P4_HOLD_R 5        /* 대기 거리(출구까지의 걸음 수) */
 #endif
@@ -234,6 +270,72 @@ static void p4_wdist(const Snapshot *s, double hit[P4_N][P4_N], unsigned char oc
     }
 }
 
+/* ---------- 시간을 포함한 A* ----------
+   상태 = (칸, 걸음 수). 걸음 수 t 에 그 칸으로 들어갈 때의 비용 = 1 + asHit * (그 칸이 그 시점에 공격받을 확률).
+   공격받을 확률: 상대와 체비쇼프 거리 1 이내면 pa, 걸음 수 안에 붙을 수 있으면 pa * P4_AS_REACH.
+   휴리스틱은 위험을 뺀 BFS 거리(dE)라서 허용 가능(과대평가하지 않음). 열쇠를 든 선수는 가만히 있을 수 없으므로 매 걸음 이동한다. */
+typedef struct P4Node { float f, g; unsigned char x, y, t; } P4Node;
+
+static double p4_as_risk(const int *ex, const int *ey, int ne, int x, int y, int t)
+{
+    double ok = 1.0, pa = P4_ATK_P / 100.0 * 0.6;
+    int i;
+    for (i = 0; i < ne; ++i) {
+        int ch = p4_cheb(x, y, ex[i], ey[i]);
+        if (ch <= 1) ok *= 1.0 - pa;
+        else if (ch <= t) ok *= 1.0 - pa * P4_AS_REACH;
+    }
+    return 1.0 - ok;
+}
+
+static double p4_astar(const Snapshot *s, int sx, int sy, int t0, int dE[P4_N][P4_N],
+                       unsigned char occ[P4_N][P4_N], const int *ex, const int *ey, int ne, double asHit, int exitFree)
+{
+    float gbest[P4_AS_T + 1][P4_N][P4_N];
+    P4Node heap[6000];
+    int n = 0, t, x, y;
+    for (t = t0; t <= P4_AS_T; ++t)
+        for (y = 0; y < s->size; ++y)
+            for (x = 0; x < s->size; ++x) gbest[t][y][x] = 1e9f;
+    gbest[t0][sy][sx] = 0.0f;
+    heap[n].f = (float)dE[sy][sx]; heap[n].g = 0.0f; heap[n].x = (unsigned char)sx; heap[n].y = (unsigned char)sy; heap[n].t = (unsigned char)t0; ++n;
+    while (n > 0) {
+        P4Node cur = heap[0];
+        int i = 0, d;
+        heap[0] = heap[--n];
+        for (;;) {   /* 힙 정리: 아래로 내리기 */
+            int l = 2 * i + 1, r = l + 1, m = i;
+            if (l < n && heap[l].f < heap[m].f) m = l;
+            if (r < n && heap[r].f < heap[m].f) m = r;
+            if (m == i) break;
+            { P4Node tmp = heap[i]; heap[i] = heap[m]; heap[m] = tmp; }
+            i = m;
+        }
+        if (cur.g > gbest[cur.t][cur.y][cur.x]) continue;
+        if (s->terrain[cur.y][cur.x] == 'E') return cur.g;
+        if (cur.t >= P4_AS_T) continue;
+        for (d = 0; d < 4; ++d) {
+            int nx = cur.x + p4dx[d], ny = cur.y + p4dy[d], nt = cur.t + 1;
+            double c;
+            float ng;
+            if (!p4_can(s, nx, ny, 1) || dE[ny][nx] >= P4_INF) continue;
+            if (occ[ny][nx]) continue;
+            c = 1.0;
+            if (!(s->terrain[ny][nx] == 'E' && exitFree)) c += asHit * p4_as_risk(ex, ey, ne, nx, ny, nt);
+            ng = cur.g + (float)c;
+            if (ng >= gbest[nt][ny][nx] || n >= 5999) continue;
+            gbest[nt][ny][nx] = ng;
+            i = n++;
+            heap[i].f = ng + (float)dE[ny][nx]; heap[i].g = ng; heap[i].x = (unsigned char)nx; heap[i].y = (unsigned char)ny; heap[i].t = (unsigned char)nt;
+            while (i > 0 && heap[(i - 1) / 2].f > heap[i].f) {   /* 힙 정리: 위로 올리기 */
+                P4Node tmp = heap[i]; heap[i] = heap[(i - 1) / 2]; heap[(i - 1) / 2] = tmp;
+                i = (i - 1) / 2;
+            }
+        }
+    }
+    return 1e9;
+}
+
 Command P4_FN(const char *state_path)
 {
     static const int dummy = 0; /* (static 상태는 쓰지 않는다. 읽기 전용 상수) */
@@ -258,6 +360,9 @@ Command P4_FN(const char *state_path)
     int seat, seatGo, seatStg, seatStx, seatHm;
     int claimOn = 0;
     int waitPick = 0;
+    int dropOK[4] = {0, 0, 0, 0}, bait = 0;
+    double asCost[4] = {0.0, 0.0, 0.0, 0.0};
+    int asOn = 0;
     (void)dummy;
 
     fp = fopen(state_path, "r");
@@ -486,6 +591,42 @@ Command P4_FN(const char *state_path)
         if (wmul > P4_URG_WMAX) wmul = P4_URG_WMAX;
     }
 
+    if (P4_ASTAR && mode == 3 && !hold) {
+        int ex[PLAYER_COUNT], ey[PLAYER_COUNT], ne = 0;
+        double asHit = hitCost / P4_W * P4_AS_HIT;
+        for (i = 0; i < PLAYER_COUNT; ++i)
+            if (alive[i]) { ex[ne] = s.players[i].pos.x; ey[ne] = s.players[i].pos.y; ++ne; }
+        for (d = 0; d < 4; ++d) {
+            int nx = me.x + p4dx[d], ny = me.y + p4dy[d];
+            if (!p4_can(&s, nx, ny, 1)) { asCost[d] = 1e9; continue; }
+            if (s.terrain[ny][nx] == 'E') { asCost[d] = 0.0; continue; }
+            asCost[d] = occ[ny][nx] ? 1e9 : p4_astar(&s, nx, ny, 1, dE, occ, ex, ey, ne, asHit, myhp >= 2);
+        }
+        asOn = 1;
+    }
+
+    if (P4_DROP && ((P4_DROP_MASK >> seat) & 1) && carrying && dE[me.y][me.x] >= P4_DROP_MIND && (s.turn % P4_DROP_CD) < P4_DROP_WIN) {
+        int nt = 0, ti = -1, farOk = 1;
+        for (i = 0; i < PLAYER_COUNT; ++i) {
+            int ch;
+            if (!alive[i]) continue;
+            ch = p4_cheb(me.x, me.y, s.players[i].pos.x, s.players[i].pos.y);
+            if (ch <= 2) { ++nt; ti = i; } else if (ch <= 5) farOk = 0;
+        }
+        if (nt == 1 && farOk && (s.players[ti].hp == 1 || P4_DROP_ANYHP)) {
+            for (d = 0; d < 4; ++d) {
+                int kx = me.x + p4dx[d], ky = me.y + p4dy[d];
+                if (p4_can(&s, kx, ky, 0) && !occ[ky][kx] && p4_cheb(kx, ky, s.players[ti].pos.x, s.players[ti].pos.y) == 1) dropOK[d] = 1;
+            }
+        }
+    }
+    if (P4_DROP && ((P4_DROP_MASK >> seat) & 1) && keyFloor && !carrying) {       /* 방금 떨어뜨린 열쇠 옆에 HP 1 상대가 있고 내 부채꼴 안이면 줍는 순간을 친다 */
+        int nb = 0, bi = -1;
+        for (i = 0; i < PLAYER_COUNT; ++i)
+            if (alive[i] && abs(s.players[i].pos.x - s.key.x) + abs(s.players[i].pos.y - s.key.y) == 1) { ++nb; bi = i; }
+        if (nb == 1 && s.players[bi].hp == 1 && p4_cheb(me.x, me.y, s.players[bi].pos.x, s.players[bi].pos.y) == 1) bait = 1;
+    }
+
     /* ---------- 16개 명령 평가 ---------- */
     for (c = 0; c < COMMAND_COUNT; ++c) {
         int nx = me.x, ny = me.y, valid = 1, moving = 0;
@@ -500,7 +641,7 @@ Command P4_FN(const char *state_path)
             int px = me.x + p4dx[c - 8], py = me.y + p4dy[c - 8];
             valid = keyFloor && !carrying && px == s.key.x && py == s.key.y;
         } else {
-            valid = 0; /* 열쇠 버리기는 쓰지 않는다 */
+            valid = dropOK[c - 12];   /* 열쇠 버리기: 평소에는 쓰지 않고 P4_DROP 조건을 만족할 때만 */
         }
         if (!valid) continue;
 
@@ -514,6 +655,7 @@ Command P4_FN(const char *state_path)
             }
             else if (mode == 0) dd = abs((int)dd - 1);
             else if (mode == 3 && hold) dd = dE[ny][nx] >= P4_INF ? 200 : abs(dE[ny][nx] - P4_HOLD_R);
+            else if (mode == 3 && asOn && c < 4) dd = asCost[c] < 1e8 ? asCost[c] : 200.0;
             else if (mode == 3 && useW) dd = s.terrain[ny][nx] == 'E' ? 0.0 : (dW[ny][nx] < 1e8 ? dW[ny][nx] : 200.0);
             score -= P4_W * wmul * dd;
         }
@@ -526,6 +668,7 @@ Command P4_FN(const char *state_path)
             if (moving) risk += hitCost * (pd[ny][nx] > 1.0 ? 1.0 : pd[ny][nx]) * 0.9;
         }
 
+        if (c >= 12) gain += P4_DROP_V;
         if (c >= 8 && c < 12) {                 /* 열쇠 줍기 */
             double conf = 0.0;
             for (i = 0; i < PLAYER_COUNT; ++i) {
@@ -533,7 +676,7 @@ Command P4_FN(const char *state_path)
                 if (abs(s.players[i].pos.x - s.key.x) + abs(s.players[i].pos.y - s.key.y) == 1)
                     conf = 1.0 - (1.0 - conf) * ((100 - P4_PICK_Q) / 100.0);
             }
-            gain += (waitPick ? -50.0 : P4_PICK_V * (1.0 - conf)) - hitCost * conf;
+            gain += (waitPick ? -50.0 : (bait ? -400.0 : P4_PICK_V * (1.0 - conf))) - hitCost * conf;
         }
 
         if (c >= 4 && c < 8) {                  /* 공격 + (제자리이므로) 막기 */
@@ -548,13 +691,13 @@ Command P4_FN(const char *state_path)
                 if (carrier == i) v *= P4_CARRIER_MUL;
                 gain += pin * v;
             }
-            if (P4_PICKER_ATK > 0 && keyFloor) {      /* 열쇠를 주우려는 상대는 제자리라 부채꼴에 들어 있으면 확실히 맞는다 */
+            if ((P4_PICKER_ATK > 0 || bait) && keyFloor) {      /* 열쇠를 주우려는 상대는 제자리라 부채꼴에 들어 있으면 확실히 맞는다 */
                 for (i = 0; i < PLAYER_COUNT; ++i) {
                     int ex, ey;
                     if (!alive[i]) continue;
                     ex = s.players[i].pos.x; ey = s.players[i].pos.y;
                     if (abs(ex - s.key.x) + abs(ey - s.key.y) == 1 && p4_in_fan(me.x, me.y, c - 4, ex, ey))
-                        gain += (P4_PICK_Q / 100.0) * P4_PICKER_ATK;
+                        gain += (P4_PICK_Q / 100.0) * (bait ? P4_DROP_ATK : P4_PICKER_ATK);
                 }
             }
             if (carrier >= 0 && carrier != s.self && alive[carrier])
