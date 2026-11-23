@@ -97,10 +97,10 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #define P4_PICKER_ATK 0    /* 열쇠를 주우려 가만히 서 있는 상대를 공격하는 추가 가치(0이면 쓰지 않는다) */
 #endif
 #ifndef P4_CLAIM
-#define P4_CLAIM 0         /* 1이면 열쇠를 안 가는 자리는 열쇠 옆이 아니라 출구 근처의 덜 붐비는 칸을 미리 차지한다 */
+#define P4_CLAIM 1         /* 1이면 열쇠를 안 가는 자리는 열쇠 옆이 아니라 출구 근처의 덜 붐비는 칸을 미리 차지한다 */
 #endif
 #ifndef P4_CLAIM_MASK
-#define P4_CLAIM_MASK 63   /* 자리(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR) 비트마스크: 적용할 자리 */
+#define P4_CLAIM_MASK 40   /* 자리(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR) 비트마스크: 적용할 자리. 40 = BL·BR만 */
 #endif
 #ifndef P4_CLAIM_R
 #define P4_CLAIM_R 3       /* 출구까지의 걸음 수가 이 값 이하인 칸만 후보 */
@@ -120,11 +120,14 @@ char player4_name[PLAYER_NAME_BYTES] = "P4";
 #ifndef P4_WAIT_MASK
 #define P4_WAIT_MASK 23    /* 적용할 자리 비트마스크(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR). 23 = BL·BR 제외 */
 #endif
+#ifndef P4_WAIT_W1
+#define P4_WAIT_W1 1.0     /* HP 1인 지킴이를 세는 비중(1.0이면 HP와 상관없이 1명, 낮을수록 약해진 지킴이를 무시) */
+#endif
+#ifndef P4_WAIT_NTAB
+#define P4_WAIT_NTAB { 2, 2, 2, 2, 2, 2 }   /* 자리별 지킴이 기준(0 TL,1 TM,2 TR,3 BL,4 BM,5 BR) */
+#endif
 #ifndef P4_WAIT_R
 #define P4_WAIT_R 3        /* 출구까지의 걸음 수가 이 값 이하인 상대를 지킴이로 센다 */
-#endif
-#ifndef P4_WAIT_N
-#define P4_WAIT_N 2        /* 지킴이가 이 수 이상이면 줍지 않는다 */
 #endif
 #ifndef P4_WAIT_UNTIL
 #define P4_WAIT_UNTIL 150  /* 이 턴 이후에는 기다리지 않는다(아무도 안 줍는 교착 방지) */
@@ -398,10 +401,12 @@ Command P4_FN(const char *state_path)
         bonus = P4_GO_BIAS + seatGo + idle / P4_IDLE_DIV + s.turn / P4_PATIENCE + finished;
         mode = (minEta - myEta + bonus >= 0 || nalive == 0) ? 0 : 1;
         if (P4_WAIT && ((P4_WAIT_MASK >> seat) & 1) && s.turn < P4_WAIT_UNTIL) {
-            int guards = 0;
+            static const int waitN[6] = P4_WAIT_NTAB;
+            double guards = 0.0;
             for (i = 0; i < PLAYER_COUNT; ++i)
-                if (alive[i] && dE[s.players[i].pos.y][s.players[i].pos.x] <= P4_WAIT_R) ++guards;
-            if (guards >= P4_WAIT_N) { waitPick = 1; mode = 1; }
+                if (alive[i] && dE[s.players[i].pos.y][s.players[i].pos.x] <= P4_WAIT_R)
+                    guards += s.players[i].hp >= 2 ? 1.0 : P4_WAIT_W1;
+            if (guards >= waitN[seat] - 1e-9) { waitPick = 1; mode = 1; }
         }
         memcpy(dT, dK, sizeof(dT));
         if (P4_CLAIM && mode == 1 && ((P4_CLAIM_MASK >> seat) & 1) && dE[me.y][me.x] < P4_INF) {
